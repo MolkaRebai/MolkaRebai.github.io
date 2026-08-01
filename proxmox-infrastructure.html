@@ -121,7 +121,7 @@
     segmentation (VLANs 10/20/30/40, each with its own subnet) is real and its
     firewall rules are enforced. But the Proxmox management network itself —
     where the VMs' actual IPs live — runs on a single flat /24
-    (<code>172.19.14.0/24</code>), not one subnet per VLAN. This was a deliberate
+    (<code>192.168.1.0/24</code>), not one subnet per VLAN. This was a deliberate
     simplification for the lab phase, not an oversight, but it does mean the
     full "one VLAN per trust zone" model isn't end-to-end yet for the compute
     layer itself.</p>
