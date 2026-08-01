@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building a Fully Automated, Highly Available IT Infrastructure on Proxmox VE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav"><a href="../index.html">← index</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="post-header">
+    <p class="post-meta">infrastructure · devops · final year project</p>
+    <h1>Building a Fully Automated, Highly Available IT Infrastructure on Proxmox VE</h1>
+  </div>
+
+  <div class="post-body">
+    <p>A final-year project write-up — how we designed, deployed, and validated a
+    production-grade virtualized infrastructure where a single <code>git push</code>
+    provisions machines, configures services, runs tests, and rolls back on
+    failure, with no manual intervention.</p>
+
+    <h2>The problem</h2>
+    <p>Most SMEs still run one service per physical server. It's simple, but it
+    comes with a specific set of costs that compound over time: servers sit at
+    10–20% utilization most of the day, a single hardware failure takes the
+    whole service down with it, provisioning a new server takes days, and
+    nobody notices a problem until a user complains.</p>
+    <p>The usual next step — buying a commercial virtualization platform — solves
+    some of this, but trades it for vendor lock-in and per-node licensing that
+    can run into thousands of euros for the features (HA, live migration) that
+    actually justify the switch. Public cloud solves the elasticity problem but
+    raises new ones: data sovereignty, a hard dependency on internet
+    connectivity, and long-term costs that are hard to predict.</p>
+    <p>The brief for this project, done during a stage at <strong>Prologic Tunisie</strong>, was
+    to prove a specific claim: that an <strong>open-source stack alone</strong> — no
+    commercial hypervisor, no cloud — can deliver a highly available,
+    fully automated, centrally supervised production infrastructure.</p>
+
+    <h2>What we built</h2>
+    <p>A two-node <strong>Proxmox VE</strong> cluster forms the compute layer, hosting a mix of
+    Windows Server VMs (Active Directory, WDS), Linux VMs, and LXC containers
+    for lightweight services (DNS, NFS, internal apps). Shared storage sits on
+    a NAS in RAID 5, exported over NFS so both nodes can see the same VM disks
+    — the prerequisite for live migration and HA failover.</p>
+
+<pre>git push
+   → validate.yml   (Terraform fmt/validate, ansible-lint)
+   → deploy.yml     (terraform apply → VMs, then LXC)
+   → configure.yml  (Ansible playbooks per service role)
+   → tests.yml      (connectivity + service checks)
+   → notify.yml     (Slack: success/failure + log link)</pre>
+
+    <p>That pipeline runs on GitHub Actions, but the actual <code>terraform apply</code> and
+    Ansible runs can't happen on GitHub's cloud runners — they have no route
+    into a private LAN. So a <strong>self-hosted runner</strong>, itself just an LXC
+    container on the cluster, sits as the only bridge: it opens an outbound
+    connection to pick up jobs, then executes locally against the private
+    network. Credentials never leave the perimeter; only validation jobs (pure
+    syntax checks) run on GitHub's public runners.</p>
+
+    <p>On top of that: <strong>Zabbix 7.0</strong> watches every host and triggers two things —
+    an alert to Slack/email, and, for load thresholds specifically, a
+    <code>repository_dispatch</code> call back into the same GitHub Actions pipeline,
+    which resizes the affected VM's CPU/RAM via Terraform. <strong>Veeam Backup &amp;
+    Replication</strong> runs a 3-2-1 backup policy with GFS retention. <strong>pfSense</strong>
+    segments the network into four VLANs (admin, services, monitoring, database)
+    under a default-deny policy, with <code>pfBlockerNG</code> blocking a live list of
+    ~16,700 known-malicious IPs at the WAN edge.</p>
+
+    <h2>Testing it properly</h2>
+    <p>The validation strategy leaned on forcing real failures rather than trusting
+    the design on paper — the same principle as any good security or
+    reliability tool: a claim is only as good as the failure you actually
+    caused and recovered from.</p>
+
+    <p><strong>Config-drift and idempotence testing.</strong> Every Ansible playbook was
+    re-run against an already-configured host to confirm <code>changed=0</code> — proof
+    that CI can safely re-apply configuration without side effects, which
+    matters because the pipeline re-runs on every push, not just the first one.</p>
+
+    <p><strong>Hard node failure, not a graceful shutdown.</strong> To test HA, <code>node1</code> — which
+    at the time hosted the entire workload — was killed abruptly, simulating a
+    power loss rather than a clean shutdown. Corosync detected the lost
+    heartbeat, the HA manager fenced the dead node, and every VM and container
+    was re-instantiated on the surviving node automatically. According to the
+    project's own measurements, detection took about 12 seconds and full
+    service recovery (RTO) landed around 42 seconds — and because Qdevice
+    holds the deciding vote in this two-node setup, the cluster never
+    split-brained during the test.</p>
+
+    <p><strong>Load-triggered auto-scaling, closed loop.</strong> <code>stress-ng</code> was used to pin
+    4 CPU cores on the database VM for 120 seconds. Zabbix caught the
+    threshold breach, fired the alert, and — separately — the scaling workflow
+    resized a different, genuinely idle VM down via the same Terraform-backed
+    pipeline, proving the loop runs in both directions (scale up on real load,
+    scale down on real idleness) without a human touching the console.</p>
+
+    <p><strong>Full disaster-recovery restore, not just a backup job.</strong> The strongest
+    test here: rather than trusting that a backup <em>would</em> restore, the
+    team deleted a 160 GB production VM outright and restored it from Veeam to
+    its original location — same network bridge, same storage backend — and
+    confirmed it came back fully functional, not just "present."</p>
+
+    <h2>Being honest about what's a lab simplification</h2>
+    <p>A few things are worth stating plainly, the same way the underlying report
+    does — because a design that's honest about its shortcuts is more
+    trustworthy than one that isn't.</p>
+
+    <div class="callout">
+    <p><strong>The network is flatter than the VLAN diagram suggests.</strong> The pfSense
+    segmentation (VLANs 10/20/30/40, each with its own subnet) is real and its
+    firewall rules are enforced. But the Proxmox management network itself —
+    where the VMs' actual IPs live — runs on a single flat /24
+    (<code>172.19.14.0/24</code>), not one subnet per VLAN. This was a deliberate
+    simplification for the lab phase, not an oversight, but it does mean the
+    full "one VLAN per trust zone" model isn't end-to-end yet for the compute
+    layer itself.</p>
+    </div>
+
+    <p><strong>"No downtime" resize deserves a closer look.</strong> Proxmox can hot-plug RAM
+    and, with the right guest agent and kernel support, additional vCPUs — but
+    this isn't automatic for every OS/config combination, and a Windows guest
+    in particular often needs a reboot to recognize new vCPUs even if the
+    hypervisor-side resize itself is instant. Before repeating "zero-downtime
+    auto-scaling" as a blanket claim, it's worth measuring actual in-guest
+    service continuity during a scale event, not just confirming the Terraform
+    apply succeeded.</p>
+
+    <p><strong>Veeam Community Edition has a workload ceiling.</strong> It's free and
+    genuinely full-featured for a lab or small deployment, but it caps at a
+    limited number of protected workloads — worth flagging if this design is
+    pitched as directly production-ready for a larger org rather than as a
+    proof of concept sized for a 10–15 VM cluster.</p>
+
+    <p><strong>Validation was manual, not itself automated.</strong> The recipe of tests (kill
+    the node, run stress-ng, delete the VM) is rigorous, but it was executed
+    by hand and documented via screenshots rather than wired into the CI
+    pipeline as repeatable chaos-engineering jobs. Turning "we did this test
+    once and it passed" into "this test runs on every merge to main" is the
+    natural next step for a project that's already this automation-minded
+    everywhere else.</p>
+
+    <h2>What's next</h2>
+    <ul>
+      <li><strong>Kubernetes for the application layer</strong> — move application workloads
+      from VMs to orchestrated microservices once the infrastructure layer
+      below is this solid.</li>
+      <li><strong>Automate the chaos tests themselves</strong> — turn the manual HA-failover
+      and restore drills into scheduled or CI-triggered jobs, so "the cluster
+      survives a node failure" is continuously re-verified, not verified once.</li>
+      <li><strong>AIOps-style predictive scaling</strong> — replace the fixed CPU/RAM
+      thresholds with a model that scales ahead of a load spike rather than
+      reactively after Zabbix already caught it.</li>
+      <li><strong>Multi-site / hybrid-cloud extension</strong> — the natural path if the
+      cluster ever needs elasticity beyond the two physical nodes on hand.</li>
+    </ul>
+
+    <h2>References</h2>
+    <ul>
+      <li>Popek, G. J. and Goldberg, R. P. (1974). <em>Formal Requirements for
+      Virtualizable Third Generation Architectures</em>. Communications of the ACM.
+      <a href="https://dl.acm.org/doi/10.1145/361011.361073" target="_blank" rel="noopener">dl.acm.org</a></li>
+      <li>Proxmox Server Solutions GmbH. <em>Proxmox VE Documentation.</em>
+      <a href="https://pve.proxmox.com/pve-docs/" target="_blank" rel="noopener">pve.proxmox.com</a></li>
+      <li>HashiCorp. <em>Terraform Documentation.</em>
+      <a href="https://developer.hashicorp.com/terraform/docs" target="_blank" rel="noopener">developer.hashicorp.com</a></li>
+      <li>Red Hat. <em>Ansible Documentation.</em>
+      <a href="https://docs.ansible.com/" target="_blank" rel="noopener">docs.ansible.com</a></li>
+      <li>Netgate. <em>pfSense Documentation.</em>
+      <a href="https://docs.netgate.com/pfsense/en/latest/" target="_blank" rel="noopener">docs.netgate.com</a></li>
+    </ul>
+
+    <h2>Code</h2>
+    <p>Full project — Terraform modules (VM and LXC), Ansible playbooks, and
+    GitHub Actions workflows — is on GitHub:
+    <a href="https://github.com/MolkaRebai/PFE-Infrastructure-Proxmox" target="_blank" rel="noopener">MolkaRebai/PFE-Infrastructure-Proxmox ↗</a></p>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:36px 0">
+    <p style="color:var(--text-mute);font-size:14px">This project was completed with Imen Ferchichi at Prologic Tunisie, under
+    the supervision of Mohamed Kheiridine Zarkouna (Prologic) and Issa Chihaoui
+    (ISTIC). If you spot something worth improving, I'd like to hear it.</p>
+
+    <p><a class="back-link" href="../index.html">← back to all projects</a></p>
+  </div>
+</div>
+
+</body>
+</html>

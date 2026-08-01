@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Molka Rebai — Systems &amp; Security Engineering</title>
+<meta name="description" content="Projects in infrastructure automation, security, and applied ML — write-ups included.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav">
+      <a href="https://github.com/MolkaRebai" target="_blank" rel="noopener">github</a>
+      <a href="#projects">projects</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <section class="hero">
+    <p class="eyebrow">systems &amp; security engineering</p>
+    <h1>I build infrastructure, then try hard to break it before anyone else does.</h1>
+    <p>Networking, virtualization, and applied ML — with a habit of writing down what actually
+       worked, what didn't, and what was still a placeholder when I shipped it.</p>
+    <div class="links">
+      <a href="https://github.com/MolkaRebai" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="mailto:you@example.com">Email</a>
+      <a href="#" target="_blank" rel="noopener">LinkedIn ↗</a>
+    </div>
+  </section>
+
+  <div id="projects" class="section-label">projects</div>
+
+  <div class="log">
+    <a class="entry" href="posts/proxmox-infrastructure.html">
+      <div class="entry-top">
+        <span class="entry-title">fully-automated-ha-infrastructure</span>
+        <span class="entry-status">shipped</span>
+      </div>
+      <p class="entry-desc">A two-node Proxmox VE cluster with GitOps-driven provisioning: a single
+        git push deploys VMs and containers, configures them with Ansible, and rolls resource
+        scaling through Zabbix-triggered CI. Validated with a hard node kill and a full VM restore
+        from backup, not just a design doc.</p>
+      <div class="entry-tags">
+        <span class="tag">proxmox</span><span class="tag">terraform</span>
+        <span class="tag">ansible</span><span class="tag">github-actions</span>
+        <span class="tag">zabbix</span><span class="tag">pfsense</span>
+      </div>
+    </a>
+
+    <a class="entry" href="posts/antiphishing.html">
+      <div class="entry-top">
+        <span class="entry-title">smart-anti-phishing-extension</span>
+        <span class="entry-status">shipped</span>
+      </div>
+      <p class="entry-desc">A 4-class URL classifier trained on 650k+ labeled URLs, shipped as a
+        Chrome MV3 extension. Write-up includes an honest look at the gap between the trained
+        LightGBM model and the heuristic that currently ships client-side.</p>
+      <div class="entry-tags">
+        <span class="tag">lightgbm</span><span class="tag">chrome-extension</span>
+        <span class="tag">nlp</span><span class="tag">manifest-v3</span>
+      </div>
+    </a>
+  </div>
+
+  <footer>
+    <div>last deploy: manual · built with a static site, no framework required</div>
+  </footer>
+</div>
+
+</body>
+</html>

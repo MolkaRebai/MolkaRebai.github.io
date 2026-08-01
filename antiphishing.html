@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building a Smart Anti-Phishing Extension: URL Classification with LightGBM and Chrome MV3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav"><a href="../index.html">← index</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="post-header">
+    <p class="post-meta">security · applied ml · chrome extension</p>
+    <h1>Building a Smart Anti-Phishing Extension: URL Classification with LightGBM and Chrome MV3</h1>
+  </div>
+
+  <div class="post-body">
+    <p>A learning project write-up — how I trained a 4-class URL classifier and shipped
+    it as a real-time Chrome extension, including the honest gap between the
+    research and what actually runs in the browser today.</p>
+
+    <h2>The problem</h2>
+    <p>Traditional phishing defenses lean on blacklists: a URL gets reported, someone
+    verifies it, it's added to a list, and browsers block it from then on. That
+    works, but only <em>after</em> the first victim. New phishing domains are cheap to
+    register and typically live for hours to days, so a static list is always a
+    step behind.</p>
+    <p>The alternative is to judge a URL on its own structure — the way it's shaped,
+    not whether it's been seen before. A URL like <code>secure-paypal-login.tk/verify?id=</code>
+    carries signal in its shape alone: a suspicious keyword, an unusual TLD, a
+    query string, no real brand domain. I wanted to see how far that idea could go
+    if trained on a large, real-world dataset, and whether it could run cheaply
+    enough to sit directly in the browser.</p>
+
+    <h2>What I built</h2>
+    <p>A 4-class classifier — <strong>benign, phishing, malware, defacement</strong> — trained on
+    <strong>651,191 labeled URLs</strong>, using <strong>21 structural features</strong> extracted from the
+    raw URL string alone: IP-address usage, <code>@</code> symbol presence, hyphen count,
+    subdomain depth, shortening-service detection, suspicious keywords, URL and
+    hostname length, and so on. No page content, no network requests, no
+    rendering — just the string.</p>
+
+<pre>label datasets (malicious_phish.csv, phishing_urls.csv)
+   → feature extraction (21 features, pure string/regex logic)
+   → LightGBM multiclass classifier (gradient-boosted trees)
+   → classification_report + confusion matrix
+   → joblib.dump("lgb_model.pkl")</pre>
+
+    <p>I trained with <code>LGBMClassifier(objective='multiclass', boosting_type='gbdt')</code>,
+    evaluated with a full classification report and confusion matrix per class,
+    and saved the fitted model with <code>joblib</code>. On the held-out test set, the
+    model reached:</p>
+
+    <table>
+      <tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th></tr>
+      <tr><td>Benign</td><td>0.96</td><td>0.99</td><td>0.97</td></tr>
+      <tr><td>Defacement</td><td>0.93</td><td>0.98</td><td>0.96</td></tr>
+      <tr><td>Malware</td><td>0.96</td><td>0.84</td><td>0.89</td></tr>
+      <tr><td>Phishing</td><td>0.90</td><td>0.79</td><td>0.84</td></tr>
+      <tr><td><strong>Weighted avg</strong></td><td><strong>0.95</strong></td><td><strong>0.95</strong></td><td><strong>0.95</strong></td></tr>
+    </table>
+
+    <p>Phishing is the hardest class, and that tracks with intuition: phishing pages
+    increasingly mimic real login flows almost exactly, so the URL-only signal is
+    weaker there than for something structurally distinctive like a defacement
+    URL. Malware's recall (0.84) tells a similar story — some malware URLs simply
+    don't <em>look</em> different from benign ones at the string level.</p>
+
+    <h2>Turning it into a Chrome extension</h2>
+    <p>The extension is Manifest V3: a background service worker
+    (<code>background.js</code>) intercepts navigation via <code>webNavigation.onBeforeNavigate</code>,
+    a content script (<code>content.js</code>) scans every <code>&lt;a&gt;</code> tag on the page (including
+    ones added dynamically, via a <code>MutationObserver</code>) and asks the background
+    worker to classify each link's destination, and <code>declarativeNetRequest</code> blocks
+    confirmed-malicious navigations by redirecting to a warning page.</p>
+
+<pre>webNavigation.onBeforeNavigate
+   → extractFeatures(url)          — 21 features, in JS
+   → classify → {class, confidence, score}
+   → confidence > 0.85 & (phishing|malware) → declarativeNetRequest block + redirect
+   → otherwise, suspicious → inline warning badge on the link in content.js</pre>
+
+    <p>Blocking rules are temporary by design — each one auto-expires after 30
+    seconds, since phishing infrastructure rotates domains quickly and a
+    permanent rule list would just grow stale.</p>
+
+    <h2>The honest gap: the trained model vs. what ships in the browser</h2>
+    <p>This is the part I think is worth being upfront about, because it's the
+    single most important engineering fact about the current version.</p>
+
+    <div class="callout">
+    <p><strong>The 95%-accuracy numbers above belong to the real, trained LightGBM model</strong>
+    (<code>lgb_model.pkl</code>), evaluated offline in Python against the test set.
+    <strong>That model does not run inside the browser.</strong> LightGBM is a tree ensemble
+    with no native JavaScript runtime, and I haven't yet built the export step
+    (something like <code>m2cgen</code>, ONNX.js, or a hand-rolled tree-traversal compiled
+    to JS) that would let the browser execute the <em>actual</em> fitted trees.</p>
+    </div>
+
+    <p>What ships today in <code>background.js</code> is a <strong>hand-tuned heuristic that
+    approximates the model's behavior</strong>: the same 21 features are extracted
+    client-side, but instead of running them through the real trees, each class
+    gets a weighted linear score against a small number of hand-picked features
+    (phishing weights <code>suspicious_words</code> and <code>shortening_service</code> heavily, for
+    example), and the class with the highest score wins. <code>model_info.json</code>'s
+    <code>feature_importances_normalized</code> array — the real importances the trained
+    model reported — is loaded but currently only kept as a fallback reference;
+    it isn't the thing actually driving predictions per-request yet.</p>
+
+    <p>So the honest framing is: <strong>the research model is real and its 95% figure is
+    real. The in-browser model is a lightweight, hand-tuned stand-in inspired by
+    that research, not a client-side port of it — yet.</strong> Calling the deployed
+    version "the LightGBM model running in your browser" overstates what's
+    currently true, and closing that gap (a genuine model export, not a rules
+    proxy) is the highest-value next step for this project.</p>
+
+    <h2>Making sure blocks are real threats, not noise</h2>
+    <p>Given that the shipped classifier is a heuristic, false positives were the
+    first thing I had to guard against — blocking <code>github.com</code> because it has a
+    hyphen and a query string would make the extension unusable.</p>
+    <ul>
+      <li><strong>Known-safe allowlist.</strong> A short list of major domains (Google, GitHub,
+      Wikipedia, Microsoft, etc.) is checked first and short-circuits everything else.</li>
+      <li><strong>Single-indicator dampening.</strong> If only one of the three strongest signals
+      (IP-address use, a shortening service, a suspicious keyword) fires and
+      overall confidence is still low, the URL is downgraded to "suspicious"
+      rather than blocked outright — one signal alone isn't proof.</li>
+      <li><strong>Short-URL leniency.</strong> Very short URLs with low confidence default to
+      benign, since most of the 21 features need a reasonably long string to be
+      meaningful in the first place.</li>
+      <li><strong>Two-tier response.</strong> Only high-confidence (&gt;0.85) phishing/malware
+      predictions trigger an actual navigation block; everything in the
+      "suspicious" band gets an inline warning badge on the link instead — the
+      person can still choose to proceed.</li>
+    </ul>
+
+    <h2>What I'd improve next</h2>
+    <ul>
+      <li><strong>Actually port the trained model.</strong> Export <code>lgb_model.pkl</code>'s trees (via
+      <code>m2cgen</code>, a WASM build, or ONNX.js) so the browser runs genuine LightGBM
+      inference instead of the current heuristic proxy.</li>
+      <li><strong>Align the class-index mapping.</strong> The Python training script and the
+      in-browser classifier order the four classes differently in a couple of
+      places; worth auditing end-to-end once real inference replaces the proxy.</li>
+      <li><strong>Expand the allowlist model.</strong> A hardcoded domain list doesn't scale;
+      a Tranco/Majestic top-N list or a small on-device cache would generalize better.</li>
+      <li><strong>Add a feedback loop.</strong> Let a user flag a wrong block/miss from the popup
+      and use that signal to retrain periodically.</li>
+    </ul>
+
+    <h2>References</h2>
+    <ul>
+      <li>Sahoo, D., Liu, C., and Hoi, S. C. H. (2017). <em>Malicious URL Detection using
+      Machine Learning: A Survey</em>. arXiv.
+      <a href="https://arxiv.org/abs/1701.07179" target="_blank" rel="noopener">arxiv.org</a></li>
+      <li>Ke, G. et al. (2017). <em>LightGBM: A Highly Efficient Gradient Boosting
+      Decision Tree</em>. NeurIPS.
+      <a href="https://papers.nips.cc/paper/6907-lightgbm-a-highly-efficient-gradient-boosting-decision-tree" target="_blank" rel="noopener">papers.nips.cc</a></li>
+      <li>Chrome for Developers. <em>Manifest V3 Overview.</em>
+      <a href="https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3" target="_blank" rel="noopener">developer.chrome.com</a></li>
+      <li>PhishTank / Kaggle <em>Malicious URLs Dataset</em> (<code>sid321axn/malicious-urls-dataset</code>)</li>
+    </ul>
+
+    <h2>Code</h2>
+    <p>The full project — training pipeline, extension source, and model artifacts —
+    is on GitHub: <a href="#" target="_blank" rel="noopener">your GitHub link here ↗</a></p>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:36px 0">
+    <p style="color:var(--text-mute);font-size:14px">If you spot something I got wrong, or have ideas for closing the
+    model-export gap, I'd genuinely like to hear it — this was a learning project
+    and I'm still building.</p>
+
+    <p><a class="back-link" href="../index.html">← back to all projects</a></p>
+  </div>
+</div>
+
+</body>
+</html>
