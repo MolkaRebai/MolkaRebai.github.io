@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building FragGuard: Detecting IP Fragmentation Attacks with Python and Scapy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav"><a href="../index.html">← index</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="post-header">
+    <p class="post-meta">networking · security · python</p>
+    <h1>Building FragGuard: Detecting IP Fragmentation Attacks with Python and Scapy</h1>
+  </div>
+
+  <div class="post-body">
+    <p>A learning project write-up — how I built, tested, and validated a tool that
+    detects and blocks classic IP fragmentation attacks.</p>
+
+    <h2>The problem</h2>
+    <p>Every large packet sent over the internet gets broken into smaller pieces before
+    it reaches you. Network links have a maximum size they can carry in one go — an
+    Ethernet link's is typically 1,500 bytes — so anything bigger gets split into
+    <strong>fragments</strong> and reassembled by the receiver.</p>
+    <p>That reassembly step is quietly one of the oldest attack surfaces in networking.
+    It happens <em>after</em> many firewalls stop inspecting traffic, and it requires the
+    receiving host to hold state in memory while waiting for the rest of the pieces
+    to arrive. Four classic attacks abuse exactly that gap, and I wanted to build
+    something that could actually catch all four — not just read about them.</p>
+
+    <h2>The four attacks</h2>
+    <table>
+      <tr><th>Attack</th><th>The abuse</th><th>Why it works</th></tr>
+      <tr>
+        <td><strong>Tiny Fragment</strong></td>
+        <td>First fragment made too small to hold a real transport header</td>
+        <td>Firewalls that only inspect the first fragment can't see the real port numbers</td>
+      </tr>
+      <tr>
+        <td><strong>Overlapping Fragments (Teardrop)</strong></td>
+        <td>Two fragments claim conflicting data at the same offset</td>
+        <td>Different systems resolved overlaps differently — this crashed real operating systems in the 1990s</td>
+      </tr>
+      <tr>
+        <td><strong>Oversized Reassembly (Ping of Death)</strong></td>
+        <td>Fragment offsets imply a reassembled packet over the legal 65,535-byte limit</td>
+        <td>Old stacks allocated fixed-size buffers that this overflowed</td>
+      </tr>
+      <tr>
+        <td><strong>Fragment Flood</strong></td>
+        <td>Massive fragment volume, or thousands of sessions that never complete</td>
+        <td>Exhausts memory/CPU even when no single fragment looks malicious</td>
+      </tr>
+    </table>
+
+    <h2>Architecture</h2>
+    <p>The pipeline is straightforward:</p>
+<pre>capture (live sniff or pcap file)
+   → handle_packet()
+   → run all 4 detection rules
+   → log an alert
+   → optionally block the source IP via iptables</pre>
+
+    <p>Two small classes give the detector "memory," which is the part that makes this
+    more than a single <code>if</code> statement:</p>
+
+    <ul>
+      <li><strong><code>FragmentSession</code></strong> — one instance per <code>(source, destination, IP-ID)</code>
+      group. Tracks every byte range seen so far for that group, so it can catch
+      overlapping ranges:
+
+<pre>def _check_overlap(self, start, end):
+    for (s, e) in self.ranges:
+        if start &lt; e and end &gt; s:
+            return True</pre>
+      </li>
+      <li><strong><code>SourceTracker</code></strong> — one instance per source IP, holding two sliding
+      time-windows (<code>deque</code>s) used for rate-based flood detection and
+      stale-session detection, without storing unbounded history.</li>
+    </ul>
+
+    <p>The <code>FragGuard</code> engine ties it together: <code>handle_packet()</code> runs on every
+    packet, computes the real byte offset (<code>ip.frag * 8</code>, since IP stores offset in
+    8-byte units), checks all four rules, and calls <code>_alert()</code> on a hit.
+    <code>_garbage_collect()</code> periodically evicts fragment groups that never completed —
+    this is what catches an attacker who opens many sessions slowly enough that no
+    single one looks like a flood by raw packet rate.</p>
+
+    <h2>Testing it properly</h2>
+    <p>This was the part I cared about most — a security tool that "should work" isn't
+    worth much without evidence. I tested it three ways, each more convincing than
+    the last:</p>
+
+    <p><strong>1. Automated unit tests.</strong> A pytest suite that feeds crafted packets straight
+    into <code>handle_packet()</code> in-process — no network, no root privileges needed:</p>
+<pre>pytest test_fragguard.py -v</pre>
+    <p>Six tests: one confirms normal fragmentation never gets falsely flagged, four
+    confirm each attack rule fires correctly, and one confirms that different
+    source IPs are tracked independently — an attacker's alerts never spill onto
+    an innocent source's counter. All six pass.</p>
+
+    <p><strong>2. Synthetic pcap generation.</strong> A small script builds one clean example of
+    each attack with Scapy and writes it to a <code>.pcap</code> file, so the detection logic
+    can be validated offline without needing live capture permissions at all.</p>
+
+    <p><strong>3. Real historical attack data.</strong> This is the strongest evidence: Wireshark's
+    official sample capture archive hosts <code>teardrop.cap</code>, an actual packet capture
+    of the real 1990s Teardrop attack, plus a legitimate fragmented-traffic capture
+    as a control. Running the tool against real historical attack data — rather
+    than data I crafted myself — is a meaningfully stronger claim that it works.</p>
+
+    <p>I also captured my own attack traffic directly: running Wireshark on the
+    Npcap loopback adapter while a test script sent real crafted fragments to
+    <code>127.0.0.1</code>, then feeding that self-captured <code>.pcap</code> straight into the tool.</p>
+
+    <h2>Making sure alerts are real attacks, not noise</h2>
+    <p>An early question I had to answer honestly: how do I know a flagged packet is
+    actually malicious, rather than ordinary loss, delay, or reordering on a real
+    network? The four rules split cleanly into two categories here.</p>
+
+    <div class="callout">
+    <p><strong>Overlap and oversized-reassembly are structural impossibilities.</strong> No amount
+    of packet loss, delay, or reordering can make a legitimately-fragmented packet
+    violate the 65,535-byte limit, or make two honest fragments claim <em>conflicting</em>
+    data at the same byte offset — those patterns only arise from deliberate
+    crafting. I did tighten the overlap check further: it originally flagged any
+    overlapping byte range, but a harmless retransmission (the same bytes resent
+    at the same offset after a delayed ACK) also overlaps. The fix was comparing
+    the actual bytes in the overlapping region, not just whether the ranges touch
+    — only a genuine content <em>conflict</em> counts as an attack signal now.</p>
+    </div>
+
+    <p><strong>Tiny-fragment and flood/flood-adjacent rules are statistical, and need
+    tuning against your network's baseline.</strong> A path with an unusually small MTU
+    (some VPN tunnels) could occasionally produce a small first fragment
+    legitimately, and real congestion can make a session look "stale." The fix
+    here was requiring a <em>repeated pattern</em> before alerting rather than a single
+    occurrence — a configurable <code>--tiny-repeat</code> threshold, plus an existing
+    stale-session threshold that already required more than a handful of
+    incomplete sessions before flagging a source. I also added a trusted-source
+    allowlist (<code>--whitelist</code>, CIDR-aware) so a known unusual device — a VPN
+    gateway, say — can be excluded entirely rather than fighting its false
+    positives with thresholds alone.</p>
+
+    <h2>What I'd improve next</h2>
+    <ul>
+      <li>Add IPv6 extension-header fragmentation detection.</li>
+      <li>Swap the flat log file for SQLite plus a small dashboard.</li>
+      <li>Replace the <code>iptables</code>-only blocking backend with a cross-platform option
+      (e.g. Windows Firewall via <code>netsh advfirewall</code>) so blocking isn't Linux-only.</li>
+      <li>Time-limited/auto-expiring blocks instead of permanent firewall rules.</li>
+    </ul>
+
+    <h2>Code</h2>
+    <p>The full project — detector, both test suites, README, and CI config — is on
+    GitHub: <a href="https://github.com/MolkaRebai/fragguard" target="_blank" rel="noopener">MolkaRebai/fragguard ↗</a></p>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:36px 0">
+    <p style="color:var(--text-mute);font-size:14px">If you spot something I got wrong, or have ideas for what to add next, I'd
+    genuinely like to hear it — this was a learning project and I'm still building.</p>
+
+    <p><a class="back-link" href="../index.html">← back to all projects</a></p>
+  </div>
+</div>
+
+</body>
+</html>

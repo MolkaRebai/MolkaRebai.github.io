@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-Time Arabic Sign Language Recognition with MediaPipe and ResNet50</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav"><a href="../index.html">← index</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="post-header">
+    <p class="post-meta">applied ml · computer vision</p>
+    <h1>Real-Time Arabic Sign Language Recognition with MediaPipe and ResNet50</h1>
+  </div>
+
+  <div class="post-body">
+    <p>A learning project write-up — how I built a real-time classifier for the
+    Arabic Sign Language (ArSL) alphabet, from hand detection to on-screen
+    prediction.</p>
+
+    <h2>The problem</h2>
+    <p>Sign language recognition is a genuinely useful computer vision problem, but
+    most public tutorials and datasets target American Sign Language (ASL).
+    Arabic Sign Language has its own 31-letter alphabet, several signs that are
+    visually close to one another, and far less off-the-shelf tooling. I wanted
+    to see whether a fairly standard CNN architecture, combined with a proper
+    hand-detection front end, could get real-time recognition working end to
+    end — not just classify a static, pre-cropped image dataset.</p>
+
+    <h2>How it works</h2>
+    <p>The pipeline runs entirely on a live webcam feed:</p>
+<pre>Webcam frame
+    │
+    ▼
+MediaPipe Hands — detects hand landmarks
+    │
+    ▼
+Bounding box extraction — crops hand region with padding
+    │
+    ▼
+Resize to 224×224 — ResNet50 input format
+    │
+    ▼
+ResNet50 classifier — predicts Arabic letter
+    │
+    ▼
+Display prediction on frame + Arabic text output</pre>
+
+    <p><strong>MediaPipe Hands</strong> handles the hard part first: finding where the hand
+    actually is in the frame, independent of background, lighting, or where the
+    signer is standing. That landmark detection gives a bounding box, which gets
+    cropped with some padding and resized to the 224×224 input ResNet50 expects
+    — the same preprocessing a static-image classifier would need, just run on
+    every frame instead of once.</p>
+
+    <h2>Model &amp; training</h2>
+    <table>
+      <tr><th>Detail</th><th>Value</th></tr>
+      <tr><td>Architecture</td><td>ResNet50 (ImageNet-pretrained, fine-tuned)</td></tr>
+      <tr><td>Input</td><td>224×224 RGB</td></tr>
+      <tr><td>Classes</td><td>31 Arabic letters</td></tr>
+      <tr><td>Training</td><td>100 epochs, batch size 32</td></tr>
+      <tr><td>Test accuracy</td><td>72.78%</td></tr>
+      <tr><td>Dataset</td><td>ArSL dataset, 1,000+ images per class</td></tr>
+    </table>
+
+    <p>Starting from ImageNet weights rather than training from scratch matters a
+    lot here — the dataset, while reasonably sized per class, is small by deep
+    learning standards, and fine-tuning a pretrained backbone gets useful edge
+    and shape features "for free" instead of having to learn them from a few
+    thousand hand images.</p>
+
+    <h3>Data augmentation</h3>
+    <p>To help the model generalize across hand positions and lighting rather than
+    memorizing the training set:</p>
+    <ul>
+      <li>Rotation (±20°)</li>
+      <li>Width &amp; height shift (±20%)</li>
+      <li>Shear and zoom (±20%)</li>
+      <li>ResNet50-specific <code>preprocess_input</code> normalization</li>
+      <li><strong>Horizontal flip disabled</strong> — deliberately, since Arabic signs
+      are not mirror-symmetric and flipping would create label noise
+      (a flipped sign can look like a different, valid letter)</li>
+    </ul>
+
+    <h2>Being honest about where 72.78% leaves things</h2>
+    <div class="callout">
+    <p><strong>72.78% test accuracy across 31 classes is a solid baseline, not a
+    production number.</strong> Random guessing across 31 classes would land around
+    3%, so the model has clearly learned real structure — but for a system meant
+    to be used in practice, roughly one in four predictions being wrong matters.
+    Several ArSL letters are visually close (differing mainly in finger
+    curl or a single extended digit), and that's almost certainly where most of
+    the remaining error concentrates, the same way visually similar ASL letters
+    are the hardest pairs for English-alphabet sign classifiers.</p>
+    </div>
+
+    <p>It's also worth being clear that the reported number is <strong>held-out test
+    accuracy on the same dataset distribution</strong> — same camera setup, similar
+    backgrounds and lighting to the training images. Real-world webcam accuracy,
+    with a different camera, a cluttered background, or inconsistent lighting,
+    hasn't been separately measured, and would reasonably be expected to be
+    lower than the reported figure until it is.</p>
+
+    <h2>What I'd improve next</h2>
+    <ul>
+      <li>Build a confusion matrix broken down by letter, to find and specifically
+      target the most-confused sign pairs rather than improving accuracy
+      uniformly.</li>
+      <li>Measure real-world webcam accuracy separately from held-out test
+      accuracy, across a few different cameras/lighting setups.</li>
+      <li>Add temporal smoothing (e.g. majority vote over the last N frames)
+      so a single misclassified frame doesn't flicker the on-screen prediction.</li>
+      <li>Try a lighter backbone (MobileNet-class) to see how much accuracy is
+      actually being traded for ResNet50's extra capacity, and whether a
+      smaller model can run faster with an acceptable accuracy cost.</li>
+    </ul>
+
+    <h2>Code</h2>
+    <p>The full project — dataset download script, training script, and the
+    real-time recognition app — is on GitHub:
+    <a href="https://github.com/MolkaRebai/ArSL-HandSigns" target="_blank" rel="noopener">MolkaRebai/ArSL-HandSigns ↗</a></p>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:36px 0">
+    <p style="color:var(--text-mute);font-size:14px">If you spot something I got wrong, or have ideas for closing the accuracy
+    gap, I'd genuinely like to hear it — this was a learning project and I'm
+    still building.</p>
+
+    <p><a class="back-link" href="../index.html">← back to all projects</a></p>
+  </div>
+</div>
+
+</body>
+</html>

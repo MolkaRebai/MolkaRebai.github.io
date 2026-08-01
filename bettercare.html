@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BetterCare: A Student Portal for Therapeutic Access</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">molka<span>@</span>rebai</div>
+    <nav class="nav"><a href="../index.html">← index</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="post-header">
+    <p class="post-meta">web · full-stack</p>
+    <h1>BetterCare: A Student Portal for Therapeutic Access</h1>
+  </div>
+
+  <div class="post-body">
+    <p>A learning project write-up — the student-facing side of BetterCare, a
+    platform aimed at making it easier for students to find and reach
+    therapeutic support.</p>
+
+    <h2>The problem</h2>
+    <p>Getting therapeutic support as a student usually starts with friction: not
+    knowing which therapists are available, having to reach out by phone or
+    email to even find a time slot, and no easy way to notice a pattern in how
+    you've been feeling over weeks rather than a single bad day. BetterCare's
+    goal is to collapse that into one place — find a therapist, book a slot,
+    and keep a lightweight day-to-day record, without the usual back-and-forth.</p>
+
+    <h2>What this repo covers</h2>
+    <p>This repository is specifically the <strong>student-side interface</strong> of
+    BetterCare — the part a student actually logs into. It's built with
+    <strong>Next.js</strong> on the frontend and <strong>Firebase</strong> for authentication and data,
+    styled with <strong>Tailwind CSS</strong>.</p>
+
+    <ul>
+      <li><strong>Authentication</strong> — student sign-up and login via Firebase Auth.</li>
+      <li><strong>Therapist search</strong> — browse and filter therapists by specialty or
+      location.</li>
+      <li><strong>Appointment booking</strong> — book a session directly from a therapist's
+      profile.</li>
+      <li><strong>Mood tracking</strong> — a daily check-in so a student (and, implicitly,
+      their therapist) can see how mood trends over time, not just how it looks
+      in a single session.</li>
+      <li><strong>Messaging</strong> — a channel for student–therapist communication between
+      sessions.</li>
+      <li><strong>Resources</strong> — a section for self-help content and material outside of
+      direct sessions.</li>
+    </ul>
+
+    <h2>Being upfront about scope</h2>
+    <div class="callout">
+    <p><strong>This repo is one half of a larger system.</strong> "Student-side interface"
+    in the description is doing real work: the matching therapist-side app
+    (managing availability, viewing booked sessions, responding to messages)
+    is a separate piece, not part of this codebase. Judged purely on its own,
+    this repo is the client experience — sign up, search, book, track, message
+    — backed by Firebase rather than a custom backend service.</p>
+    </div>
+
+    <p>Using Firebase directly (Auth + Firestore, most likely, based on the stack)
+    is a reasonable choice for a project like this: it removes the need to
+    stand up and secure a separate backend just to validate the product idea,
+    at the cost of being more tightly coupled to Firebase's data model and
+    pricing than a custom API would be.</p>
+
+    <h2>What I'd improve next</h2>
+    <ul>
+      <li>Document the Firestore data model and security rules explicitly, since
+      that's usually where a Firebase-backed app's real correctness and
+      privacy guarantees live.</li>
+      <li>Add a proper appointment-conflict check (double-booking prevention) if
+      it isn't already enforced server-side.</li>
+      <li>Expose a lightweight way to see mood-tracking trends visually (a simple
+      chart) rather than a raw daily log.</li>
+      <li>Write up the therapist-side app alongside this one, since the two only
+      tell the full story together.</li>
+    </ul>
+
+    <h2>Code</h2>
+    <p>The full project is on GitHub:
+    <a href="https://github.com/MolkaRebai/profil_etudiant" target="_blank" rel="noopener">MolkaRebai/profil_etudiant ↗</a></p>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:36px 0">
+    <p style="color:var(--text-mute);font-size:14px">If you spot something I got wrong, or have ideas for what to add next, I'd
+    genuinely like to hear it — this was a learning project and I'm still
+    building.</p>
+
+    <p><a class="back-link" href="../index.html">← back to all projects</a></p>
+  </div>
+</div>
+
+</body>
+</html>
